@@ -41,7 +41,7 @@ LLM:
   OpenAILLM:
     model_name: deepseek-chat
     url: https://api.deepseek.com
-    api_key:
+    api_key: sk-ec54b864a56a479f88add460e9b9bc4a
   OllamaLLM:
     model_name: qwen-chat
     url: http://localhost:11434/api/chat # 注意后缀是api/chat
