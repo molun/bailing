@@ -10,7 +10,6 @@ from pydub import  AudioSegment
 import pygame
 import sounddevice as sd
 import numpy as np
-from playsound import playsound
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 import asyncio
 
@@ -185,34 +184,6 @@ class SoundDevicePlayer(AbstractPlayer):
     def stop(self):
         super().stop()
         sd.stop()
-
-
-class PydubPlayer(AbstractPlayer):
-    def do_playing(self, audio_file):
-        try:
-            audio = AudioSegment.from_file(audio_file)
-            audio.play()
-            logger.debug(f"播放完成：{audio_file}")
-        except Exception as e:
-            logger.error(f"播放音频失败: {e}")
-
-    def stop(self):
-        super().stop()
-        # Pydub does not provide a stop method
-
-
-class PlaysoundPlayer(AbstractPlayer):
-    def do_playing(self, audio_file):
-        try:
-            playsound(audio_file)
-            logger.debug(f"播放完成：{audio_file}")
-        except Exception as e:
-            logger.error(f"播放音频失败: {e}")
-
-    def stop(self):
-        super().stop()
-        # playsound does not provide a stop method
-
 
 class WebSocketPlayer(AbstractPlayer):
     """通过WebSocket发送音频到前端"""
