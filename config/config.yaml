@@ -65,7 +65,8 @@ TTS:
   KOKOROTTS:
     output_file: tmp/
     lang: z
-    voice: zm_yunyang
+    voice: zf_001
+    repo_id: hexgrad/Kokoro-82M-v1.1-zh
 
 Player:
   PygameSoundPlayer: null

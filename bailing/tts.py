@@ -4,17 +4,15 @@ import os
 import subprocess
 import time
 import uuid
-import wave
 from abc import ABC, ABCMeta, abstractmethod
 from datetime import datetime
-import pyaudio
-from pydub import AudioSegment
 from gtts import gTTS
 import edge_tts
 import ChatTTS
 import torch
 import torchaudio
 import soundfile as sf
+from kokoro import KModel, KPipeline
 
 logger = logging.getLogger(__name__)
 
@@ -167,39 +165,134 @@ class CHATTTS(AbstractTTS):
 
 
 
+# class KOKOROTTS(AbstractTTS):
+#     def __init__(self, config):
+#         from kokoro import KPipeline
+#         self.output_file = config.get("output_file", ".")
+#         self.lang = config.get("lang", "z")
+#         self.pipeline = KPipeline(lang_code=self.lang)  # <= make sure lang_code matches voice
+#         self.voice = config.get("voice", "zm_yunyang")
+#
+#     def _generate_filename(self, extension=".wav"):
+#         return os.path.join(self.output_file, f"tts-{datetime.now().date()}@{uuid.uuid4().hex}{extension}")
+#
+#     def _log_execution_time(self, start_time):
+#         end_time = time.time()
+#         execution_time = end_time - start_time
+#         logger.debug(f"Execution Time: {execution_time:.2f} seconds")
+#
+#     def to_tts(self, text):
+#         tmpfile = self._generate_filename(".wav")
+#         start_time = time.time()
+#         try:
+#             generator = self.pipeline(
+#                 text, voice=self.voice,  # <= change voice here
+#                 speed=1, split_pattern=r'\n+'
+#             )
+#             for i, (gs, ps, audio) in enumerate(generator):
+#                 logger.debug(f"KOKOROTTS: i: {i}, gs：{gs}, ps：{ps}")  # i => index
+#                 sf.write(tmpfile, audio, 24000)  # save each audio file
+#             self._log_execution_time(start_time)
+#             return tmpfile
+#         except Exception as e:
+#             logger.error(f"Failed to generate TTS file: {e}")
+#             return None
+
+
 class KOKOROTTS(AbstractTTS):
     def __init__(self, config):
-        from kokoro import KPipeline
-        self.output_file = config.get("output_file", ".")
-        self.lang = config.get("lang", "z")
-        self.pipeline = KPipeline(lang_code=self.lang)  # <= make sure lang_code matches voice
-        self.voice = config.get("voice", "zm_yunyang")
+        """
+        config keys:
+          - repo_id: HuggingFace repo ID for Kokoro model (e.g. 'hexgrad/Kokoro-82M-v1.1-zh')
+          - lang:      'z' for Chinese, 'a' for multilingual/IPA fallback
+          - voice:     e.g. 'zf_001' or 'zm_010'
+          - output_dir: directory to write wav files to
+          - sample_rate: audio sample rate (default 24000)
+          - zero_padding: number of zeros between segments (default 5000)
+        """
+        self.repo_id      = config.get("repo_id", "hexgrad/Kokoro-82M-v1.1-zh")
+        self.output_dir   = config.get("output_dir", ".")
+        self.lang         = config.get("lang", "z")
+        self.voice        = config.get("voice", "zf_001")
+        self.sample_rate  = config.get("sample_rate", 24000)
+
+        # device selection
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+
+        # load model if Chinese TTS
+        self.model = None
+        if self.lang == "z":
+            self.model = KModel(repo_id=self.repo_id).to(self.device).eval()
+
+        # set up pipelines
+        self._setup_pipelines()
+
+    def _setup_pipelines(self):
+        # English/IPA fallback pipeline
+        self.en_pipeline = KPipeline(
+            lang_code="a", repo_id=self.repo_id, model=False
+        )
+
+        def en_callable(text):
+            if text == "Kokoro":
+                return "kˈOkəɹO"
+            elif text == "Sol":
+                return "sˈOl"
+            return next(self.en_pipeline(text)).phonemes
+
+        self.en_callable = en_callable
+
+        # Main TTS pipeline
+        self.pipeline = KPipeline(
+            lang_code=self.lang,
+            repo_id=self.repo_id,
+            model=self.model,
+            en_callable=self.en_callable
+        )
 
     def _generate_filename(self, extension=".wav"):
-        return os.path.join(self.output_file, f"tts-{datetime.now().date()}@{uuid.uuid4().hex}{extension}")
+        fname = f"tts-{datetime.now().date()}@{uuid.uuid4().hex}{extension}"
+        return os.path.join(self.output_dir, fname)
 
     def _log_execution_time(self, start_time):
         end_time = time.time()
         execution_time = end_time - start_time
         logger.debug(f"Execution Time: {execution_time:.2f} seconds")
+    @staticmethod
+    def _speed_callable(len_ps: int) -> float:
+        """
+        piecewise linear function to slow down generation for long inputs
+        """
+        speed = 0.8
+        if len_ps <= 83:
+            speed = 1.0
+        elif len_ps < 183:
+            speed = 1.0 - (len_ps - 83) / 500.0
+        return speed * 1.1
 
-    def to_tts(self, text):
-        tmpfile = self._generate_filename(".wav")
+    def to_tts(self, text: str) -> str:
+        """
+        Generate TTS for `text`. Returns path to the combined WAV file.
+        """
+        output_file = self._generate_filename(".wav")
         start_time = time.time()
+
         try:
             generator = self.pipeline(
-                text, voice=self.voice,  # <= change voice here
-                speed=1, split_pattern=r'\n+'
+                text.replace("\n", " "),
+                voice=self.voice,
+                speed=self._speed_callable,
+                #split_pattern=r"\n+"
             )
-            for i, (gs, ps, audio) in enumerate(generator):
-                logger.debug(f"KOKOROTTS: i: {i}, gs：{gs}, ps：{ps}")  # i => index
-                sf.write(tmpfile, audio, 24000)  # save each audio file
-            self._log_execution_time(start_time)
-            return tmpfile
-        except Exception as e:
-            logger.error(f"Failed to generate TTS file: {e}")
-            return None
+            result = next(generator)
+            wav = result.audio
+            sf.write(output_file, wav, self.sample_rate)
 
+            self._log_execution_time(start_time)
+            return output_file
+        except Exception as e:
+            logger.error(f"[KOKOROTTS] Failed to generate TTS: {e}")
+            return ""
 
 
 def create_instance(class_name, *args, **kwargs):
