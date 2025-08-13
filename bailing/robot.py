@@ -15,31 +15,20 @@ from bailing import (
     llm,
     tts,
     vad,
-    memory,
-    rag
+    memory
 )
 from bailing.dialogue import Message, Dialogue
-from bailing.utils import is_interrupt, read_config, is_segment, extract_json_from_string
+from bailing.utils import is_interrupt, read_config, is_segment, extract_json_from_string, is_segment_sentence
+from bailing.prompt import sys_prompt
+
 from plugins.registry import Action
 from plugins.task_manager import TaskManager
 
 logger = logging.getLogger(__name__)
 
-# 由于deepseek工具调用不太准，经常会输出到content，所以显示指明参数
-sys_prompt = """
-# 角色定义
-你是百聆，由寒江雪开发。你性格开朗、活泼，善于交流。你的回复应该简短、友好、口语化强一些，回复禁止出现表情符号。
-
-#以下是历史对话摘要:
-{memory}
-
-# 回复要求
-1. 你的回复应该简短、友好、口语化强一些，回复禁止出现表情符号。
-2. 如果需要调用工具，先不要回答，调用工具后再回答，直接输出工具名和参数，输出格式```json\n{"function_name":"", "args":{}}```
-"""
 
 class Robot(ABC):
-    def __init__(self, config_file):
+    def __init__(self, config_file, websocket = None, loop = None):
         config = read_config(config_file)
         self.audio_queue = queue.Queue()
 
@@ -68,10 +57,14 @@ class Robot(ABC):
             config["VAD"][config["selected_module"]["VAD"]]
         )
 
+
         self.player = player.create_instance(
             config["selected_module"]["Player"],
             config["Player"][config["selected_module"]["Player"]]
         )
+        if config["selected_module"]["Player"].lower().find("websocket") > -1:
+            self.player.init(websocket)
+            self.listen_dialogue(self.player.send_messages)
 
         self.memory = memory.Memory(config.get("Memory"))
         self.prompt = sys_prompt.replace("{memory}", self.memory.get_memory()).strip()
@@ -102,11 +95,15 @@ class Robot(ABC):
         self.speech = []
 
         # 初始化单例
-        rag.Rag(config["Rag"])  # 第一次初始化
+        #rag.Rag(config["Rag"])  # 第一次初始化
 
         self.task_queue = queue.Queue()
         self.task_manager = TaskManager(config.get("TaskManager"), self.task_queue)
         self.start_task_mode = config.get("StartTaskMode")
+
+        if config["selected_module"]["Player"].lower().find("websocket") > -1:
+            self.player.init(websocket, loop)
+            self.listen_dialogue(self.player.send_messages)
 
     def listen_dialogue(self, callback):
         self.callback = callback
@@ -286,21 +283,28 @@ class Robot(ABC):
                     content_arguments+=content
                 else:
                     response_message.append(content)
+                    response_message_concat = "".join(response_message)
                     end_time = time.time()  # 记录结束时间
-                    logger.debug(f"大模型返回时间时间: {end_time - start_time} 秒, 生成token={content}")
-                    if is_segment(response_message):
-                        segment_text = "".join(response_message[start:])
+                    logger.debug(f"大模型返回时间时间tool: {end_time - start_time} 秒, 生成token={content}")
+                    flag_segment, index_segment = is_segment_sentence(response_message_concat, start)
+                    logger.debug(
+                        f"大模型返回时间时间tool: flag_segment={flag_segment} 秒, index_segment={index_segment}")
+
+                    if flag_segment:
+                        segment_text = response_message_concat[start:index_segment + 1]
                         # 为了保证语音的连贯，至少2个字才转tts
+
                         if len(segment_text) <= max(2, start):
                             continue
                         future = self.executor.submit(self.speak_and_play, segment_text)
                         self.tts_queue.put(future)
                         # futures.append(future)
-                        start = len(response_message)
+                        start = index_segment + 1  # len(response_message)
 
         if not tool_call_flag:
-            if start < len(response_message):
-                segment_text = "".join(response_message[start:])
+            response_message_concat = "".join(response_message)
+            if start < len(response_message_concat):
+                segment_text = response_message_concat[start:]
                 future = self.executor.submit(self.speak_and_play, segment_text)
                 self.tts_queue.put(future)
         else:
@@ -374,25 +378,29 @@ class Robot(ABC):
             # 提交 TTS 任务到线程池
             for content in llm_responses:
                 response_message.append(content)
+                response_message_concat = "".join(response_message)
                 end_time = time.time()  # 记录结束时间
-                logger.debug(f"大模型返回时间时间: {end_time - start_time} 秒, 生成token={content}")
-                if is_segment(response_message):
-                    segment_text = "".join(response_message[start:])
+                logger.debug(f"大模型返回时间时间tool: {end_time - start_time} 秒, 生成token={content}")
+                flag_segment, index_segment = is_segment_sentence(response_message_concat, start)
+                logger.debug(
+                    f"大模型返回时间时间tool: flag_segment={flag_segment} 秒, index_segment={index_segment}")
+                if flag_segment:
+                    segment_text = response_message_concat[start:index_segment + 1]
                     # 为了保证语音的连贯，至少2个字才转tts
-                    if len(segment_text)<=max(2, start):
+
+                    if len(segment_text) <= max(2, start):
                         continue
                     future = self.executor.submit(self.speak_and_play, segment_text)
                     self.tts_queue.put(future)
-                    #futures.append(future)
-                    start = len(response_message)
+                    # futures.append(future)
+                    start = index_segment + 1  # len(response_message)
 
             # 处理剩余的响应
-            if start < len(response_message):
-                segment_text = "".join(response_message[start:])
+            response_message_concat = "".join(response_message)
+            if start < len(response_message_concat):
+                segment_text = response_message_concat[start:]
                 future = self.executor.submit(self.speak_and_play, segment_text)
                 self.tts_queue.put(future)
-                #futures.append(future)
-
             # 等待所有 TTS 任务完成
             """
             for future in futures:

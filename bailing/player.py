@@ -5,12 +5,14 @@ import subprocess
 import threading
 import wave
 import pyaudio
+import json
 from pydub import  AudioSegment
 import pygame
 import sounddevice as sd
 import numpy as np
 from playsound import playsound
-
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -210,6 +212,90 @@ class PlaysoundPlayer(AbstractPlayer):
     def stop(self):
         super().stop()
         # playsound does not provide a stop method
+
+
+class WebSocketPlayer(AbstractPlayer):
+    """通过WebSocket发送音频到前端"""
+
+    def __init__(self, *args, **kwargs):
+        super(WebSocketPlayer, self).__init__(*args, **kwargs)
+
+        self.websocket = None
+        self.loop = None
+        self.playing_status = False
+        self.lock = threading.Lock()  # 添加线程锁
+
+    def init(self, websocket: WebSocket, loop):
+        self.websocket = websocket
+        self.loop = loop
+
+    def get_playing_status(self):
+        """正在播放和队列非空，为正在播放状态"""
+        return self.playing_status
+
+    def set_playing_status(self, status):
+        """正在播放和队列非空，为正在播放状态"""
+        self.playing_status = status
+
+    def do_playing(self, audio_file):
+        try:
+            with open(audio_file, "rb") as f:
+                wav_data = f.read()
+            logger.info(f"websocket 发送音频文件：{audio_file}")
+
+            asyncio.run_coroutine_threadsafe(
+                self.websocket.send_bytes(wav_data),
+                self.loop
+            )
+
+        except Exception as e:
+            logger.error(f"播放音频失败: {e}")
+
+    def interrupt(self):
+        """异步发送中断命令"""
+        try:
+            if self.websocket and self.websocket.client_state.value == 1:  # 1 = CONNECTED
+                asyncio.run_coroutine_threadsafe(
+                    self.websocket.send_text(json.dumps({"type": "interrupt"})),
+                    self.loop
+                )
+            else:
+                logger.warning("尝试中断时 WebSocket 未连接")
+        except Exception as e:
+            logger.error(f"发送中断命令失败: {e}")
+
+    def send_messages(self, messages):
+        logger.info(f"send_messages: {messages}")
+        if not self.websocket or self.websocket.client_state.value != 1:  # 1 = CONNECTED
+            logger.warning("发送消息时 WebSocket 未连接")
+            return
+
+        data = {
+            "type": "update_dialogue",
+            "data": messages if isinstance(messages, list) else [messages]
+        }
+        try:
+            asyncio.run_coroutine_threadsafe(
+                self.websocket.send_text(json.dumps(data)),
+                self.loop
+            )
+        except Exception as e:
+            logger.error(f"发送消息失败: {e}")
+
+    def stop(self):
+        """停止播放器"""
+        try:
+            if self.websocket and self.websocket.client_state.value == 1:  # 1 = CONNECTED
+                asyncio.run_coroutine_threadsafe(
+                    self.websocket.send_text(json.dumps({"type": "interrupt"})),
+                    self.loop
+                )
+            #     await self.websocket.send_text(json.dumps({"type": "interrupt"}))
+            #     # 关闭连接
+            #     await self.websocket.close()
+            # self.websocket = None
+        except Exception as e:
+            logger.error(f"停止播放器失败: {e}")
 
 
 def create_instance(class_name, *args, **kwargs):
