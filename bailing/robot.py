@@ -62,9 +62,6 @@ class Robot(ABC):
             config["selected_module"]["Player"],
             config["Player"][config["selected_module"]["Player"]]
         )
-        if config["selected_module"]["Player"].lower().find("websocket") > -1:
-            self.player.init(websocket)
-            self.listen_dialogue(self.player.send_messages)
 
         self.memory = memory.Memory(config.get("Memory"))
         self.prompt = sys_prompt.replace("{memory}", self.memory.get_memory()).strip()

@@ -78,7 +78,7 @@ Robot 负责高效的任务管理与记忆管理，能够智能地处理用户�
 
 请确保你的开发环境中安装了以下工具和库：
 
-- Python 3.11 或更高版本
+- Python 3.12 或更高版本
 - `pip` 包管理器
 - FunASR、silero-vad、deepseek、edge-tts Kokoro-82M 所需的依赖库
 
@@ -106,8 +106,10 @@ Robot 负责高效的任务管理与记忆管理，能够智能地处理用户�
      - 如果需要使用通用AIGC配置（测试中），不可用的话，可以使用tag 分支 v0.0.1 v0.0.2 
        - /third_party/OpenManus/config/config.toml  需要配置里面的 model、base_url、api_key 
 4. 运行项目：
-
-   ~~4.1 本地运行~~
+   
+   支持本地运行与服务器运行，推荐使用服务器运行该项目，可通过移动端进行对话，推荐 4.2 服务器运行
+   
+   4.1 本地运行
     ```bash 
     cd server
     python server.py # 启动后端服务，也可不执行这一步
@@ -117,12 +119,11 @@ Robot 负责高效的任务管理与记忆管理，能够智能地处理用户�
     python main.py
     ```
    
-   4.2 服务器运行
+   4.2 服务器运行（推荐）
 
    生成自签名证书 (开发环境)
     ```
-   
-    # openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365 -nodes
+   openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365 -nodes
    ```
    启动服务
     ```
