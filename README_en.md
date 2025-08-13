@@ -40,9 +40,6 @@ The Robot manages task and memory efficiently, intelligently handling user inter
 
 ![Demo](assets/example.png)
 
-[bailing audio dialogue](https://www.zhihu.com/zvideo/1818998325594177537)
-
-[bailing audio dialogue](https://www.zhihu.com/zvideo/1818994917940260865)
 
 ## Features
 
